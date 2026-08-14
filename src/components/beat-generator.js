@@ -155,6 +155,11 @@ AFRAME.registerComponent('beat-generator', {
    */
   processBeats: function () {
     if (this.data.hasSongLoadError) { return; }
+    // v4 stores note/bomb/obstacle attributes in separate *Data arrays indexed
+    // by `i`; dereference down to the v3 shape first, then fall through.
+    if (this.beatData.version && this.beatData.version.charAt(0) === '4') {
+      this.beatData = convertBeatData_4xx_to_320(this.beatData);
+    }
     // if there is version and first character is 3, convert to 2.xx
     if (this.beatData.version  && this.beatData.version.charAt(0) === '3') {
       this.beatData = convertBeatData_320_to_2xx(this.beatData);
@@ -446,6 +451,20 @@ AFRAME.registerComponent('beat-generator', {
 });
 
 function lessThan(a, b) { return a._time - b._time; }
+
+function convertBeatData_4xx_to_320(beatData) {
+  const deref = (items, dataItems) => (items || []).map(item => {
+    const attrs = (dataItems || [])[item.i || 0] || {};
+    return Object.assign({}, attrs, { b: item.b || 0 });
+  });
+  return {
+    version: '3.2.0',
+    _beatsPerMinute: beatData._beatsPerMinute,
+    colorNotes: deref(beatData.colorNotes, beatData.colorNotesData),
+    bombNotes: deref(beatData.bombNotes, beatData.bombNotesData),
+    obstacles: deref(beatData.obstacles, beatData.obstaclesData)
+  };
+}
 
 function convertBeatData_320_to_2xx(beatData) {
   const newBeatData = {

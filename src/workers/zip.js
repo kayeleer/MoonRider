@@ -48,9 +48,13 @@ addEventListener('message', function (evt) {
         if (data.info === undefined) {
           return fail(new Error('no info.dat found in zip'));
         }
-        // v4 info.dat (2024+) drops _difficultyBeatmapSets; not supported here.
+        // v4 info.dat (2024+) lists difficulties flat under difficultyBeatmaps;
+        // reshape it to the v2 structure the rest of the pipeline expects.
+        if (!data.info._difficultyBeatmapSets && data.info.difficultyBeatmaps) {
+          data.info = convertInfo_4xx_to_2xx(data.info);
+        }
         if (!data.info._difficultyBeatmapSets) {
-          return fail(new Error('unsupported info.dat format (no _difficultyBeatmapSets — v4 map?)'));
+          return fail(new Error('unsupported info.dat format (no difficulty list found)'));
         }
 
         for (const difficultyBeatmapSet of data.info._difficultyBeatmapSets) {
@@ -113,5 +117,25 @@ addEventListener('message', function (evt) {
     })
   })
 });
+
+function convertInfo_4xx_to_2xx (info) {
+  const setsByCharacteristic = {};
+  for (const beatmap of (info.difficultyBeatmaps || [])) {
+    const characteristic = beatmap.characteristic || 'Standard';
+    if (!setsByCharacteristic[characteristic]) { setsByCharacteristic[characteristic] = []; }
+    setsByCharacteristic[characteristic].push({
+      _difficulty: beatmap.difficulty,
+      _beatmapFilename: beatmap.beatmapDataFilename
+    });
+  }
+  return {
+    _version: '2.1.0',
+    _songName: info.song && info.song.title,
+    _difficultyBeatmapSets: Object.keys(setsByCharacteristic).map(name => ({
+      _beatmapCharacteristicName: name,
+      _difficultyBeatmaps: setsByCharacteristic[name]
+    }))
+  };
+}
 
 // data: {audio url, beats { difficulty JSONs },

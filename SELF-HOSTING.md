@@ -82,15 +82,24 @@ from a re-resolved tree can silently produce a broken `build/zip.js`.
 which forces the root hoist to a version that has `.destroy()` no matter how
 the rest of the tree resolves.
 
-### Known remaining limitation: v4 beatmaps
+### v4 beatmaps: supported via conversion
 
 Moon Rider understands map format v2 natively and converts v3 → v2
 (`src/components/beat-generator.js`). The **v4** format BeatSaver introduced
-in 2024 (`info.dat` without `_difficultyBeatmapSets`) is not supported —
-previously it crashed the worker mid-parse (another infinite load). It now
-fails cleanly with a song-load-error so you can pick another song. Most of
-the popular/highly-rated catalog is v2/v3 and plays fine; supporting v4 would
-be a follow-up conversion function in the worker.
+in 2024 originally crashed the zip worker mid-parse (another infinite load).
+Both halves are now converted:
+
+- v4 `info.dat` (flat `difficultyBeatmaps` list) is reshaped into v2
+  `_difficultyBeatmapSets` in the zip worker (`convertInfo_4xx_to_2xx`).
+- v4 beat data (notes/bombs/obstacles split into index + `*Data` attribute
+  arrays) is dereferenced down to the v3 shape
+  (`convertBeatData_4xx_to_320`), then flows through the existing v3 → v2
+  converter.
+
+Arcs, chains, and the separate v4 lightshow file are ignored — same as v3
+maps, where Moon Rider already skips features the engine doesn't render. A
+genuinely malformed map still fails with a visible song-load error rather
+than a hang.
 
 ## Deploying
 
