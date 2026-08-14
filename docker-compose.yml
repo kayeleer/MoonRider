@@ -10,7 +10,17 @@ services:
     restart: unless-stopped
     ports:
       - "5000:5000"
+    environment:
+      - CACHE_DIR=/data/cache
+    volumes:
+      - beatproxy-cache:/data
+
+volumes:
+  beatproxy-cache:
 
 # Point your reverse proxy (Caddy) at these two services — see
 # Caddyfile.example. /api/* and /beatproxy go to beatproxy:5000,
 # everything else to moonrider:80.
+#
+# The beatproxy-cache volume is the offline library: every song played is
+# cached there and replays with no internet. Back it up to keep the library.

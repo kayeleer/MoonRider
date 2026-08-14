@@ -117,6 +117,38 @@ NODE_ENV=production NODE_OPTIONS=--openssl-legacy-provider npx webpack
 
 and serve `index.html`, `assets/`, `build/`, `vendor/` with any web server.
 
+## Offline & fully-local operation
+
+The deployment needs no external services except BeatSaver itself — and even
+that is now cached:
+
+- **No CDNs.** `index.html` used to load A-Frame from jsdelivr (pinned commit
+  `2c4509aa`); that exact build is now vendored at
+  `vendor/aframe-master-2c4509aa.min.js`. Google Analytics and the
+  Supermedium newsletter form (which POSTed to supermedium.com) are removed.
+  Firebase (leaderboards) only activates if an API key is configured, which
+  it isn't.
+- **Song cache.** The proxy caches everything on disk under `CACHE_DIR`
+  (Docker: the `beatproxy-cache` volume; bare install: `proxy/cache/`).
+  CDN files (zips, covers, preview mp3s) are content-addressed upstream, so
+  they're served cache-first forever — any song played once replays with no
+  internet at all.
+- **Offline library.** Every map document that passes through the API proxy
+  is harvested into a local index. When BeatSaver is unreachable, search and
+  playlist requests are answered from that index instead, returning only
+  maps whose zip is already downloaded — so everything the menu offers
+  offline is actually playable. Searching by title/artist works against the
+  local library.
+- **To build a library deliberately**, just browse and play songs while
+  online — or loop `curl` over the proxy: fetch
+  `/api/search/text/<page>?sortOrder=Rating` and then `/beatproxy?url=<downloadURL>`
+  for each result's `versions[0].downloadURL`.
+
+Remaining caveat: the *default* menu playlists are a canned list bundled at
+build time (`src/lib/search.json`); offline, entries you haven't cached will
+show but fail with a visible song-load error. Search results, by contrast,
+are filtered to downloaded songs only.
+
 ## Misc notes
 
 - **Firebase / leaderboards:** `src/components/leaderboard.js` only
