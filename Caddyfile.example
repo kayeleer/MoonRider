@@ -1,0 +1,18 @@
+# Example Caddy site block for self-hosted Moon Rider.
+# Replace moonrider.example.com and the two upstream addresses with the
+# host/IPs of your containers (or LXC services).
+
+moonrider.example.com {
+	# BeatSaver JSON API and CDN fetches -> Python proxy
+	handle /api/* {
+		reverse_proxy 127.0.0.1:5000
+	}
+	handle /beatproxy* {
+		reverse_proxy 127.0.0.1:5000
+	}
+
+	# Everything else -> static site (nginx container)
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}

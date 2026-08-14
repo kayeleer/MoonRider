@@ -1,0 +1,16 @@
+services:
+  moonrider:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+
+  beatproxy:
+    build: ./proxy
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+
+# Point your reverse proxy (Caddy) at these two services — see
+# Caddyfile.example. /api/* and /beatproxy go to beatproxy:5000,
+# everything else to moonrider:80.

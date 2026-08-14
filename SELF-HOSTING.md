@@ -1,0 +1,128 @@
+# Self-Hosting Moon Rider — Research Findings & Runbook
+
+This repo is a snapshot of [supermedium/moonrider](https://github.com/supermedium/moonrider)
+(MIT licensed, last upstream commit March 2024) plus the patches needed to
+self-host it in 2026. This document explains what was broken, why, and what
+was changed.
+
+## TL;DR
+
+1. **The build is not actually broken.** `npm ci` + webpack works on Node 22
+   with one flag: `NODE_OPTIONS=--openssl-legacy-provider`. The included
+   `Dockerfile` does this for you (`docker compose up -d --build`).
+2. **Four places in the frontend hardcode BeatSaver/Supermedium URLs.** They
+   are patched in this repo to use same-origin paths (`/api/…`,
+   `/beatproxy?url=…`) that your reverse proxy fulfils.
+3. **The "infinite loading" bug had two independent causes**, both fixed
+   here — see below.
+
+## Why the stock frontend can't work self-hosted
+
+The stock code talks to four external endpoints straight from the browser:
+
+| File | URL | What breaks |
+|---|---|---|
+| `src/components/search.js` | `https://beatsaver.com/api/search/text/…` and `https://api.beatsaver.com/playlists/…` | CORS / Cloudflare when called from your origin |
+| `src/lib/convert-beatmap.js` | `https://beatproxy.b-cdn.net/<cover>.jpg` | This is **Supermedium's own private CORS proxy** (a bunny.net CDN). Your cover-art 404s come from here — it's not yours and not guaranteed to serve arbitrary origins |
+| `src/lib/convert-beatmap.js` | `downloadURL` from the API response (`https://r2cdn.beatsaver.com/<hash>.zip`) | The **web worker** (`build/zip.js`) XHRs this URL directly. If CORS headers are missing/blocked, the XHR fails inside the worker — silently (see bug #1) |
+| `src/components/song-preview.js` | `https://cdn.beatsaver.com/<hash>.mp3` | Same CORS story for preview audio |
+
+BeatSaver has broken CORS on their side before and taken down even the
+official site (see upstream issue
+[#153](https://github.com/supermedium/moonrider/issues/153)), so pinning all
+traffic through your own proxy is the robust move regardless.
+
+**Patch applied:** all four now use relative URLs. The API goes to
+`/api/<new-api-path>` (mapped to `https://api.beatsaver.com/…`), and every
+CDN fetch (zip, cover, mp3) goes to `/beatproxy?url=<encoded-url>`, which the
+Python proxy fulfils server-side with a browser User-Agent (host-allowlisted
+to `*.beatsaver.com` so it isn't an open proxy).
+
+## The infinite-loading bug — root causes
+
+### Cause 1: the zip worker swallowed every error
+
+`src/workers/zip.js` (compiled to `build/zip.js`) only ever posted a `load`
+message back to the page. Every failure path — network error, corrupt zip,
+JSON parse failure, unsupported map — did `console.error(err); return;`.
+The page-side component (`src/components/zip-loader.js`) has a handler for an
+`error` message, **but the worker never sent one**, so any failure = loading
+screen forever. Additionally the worker only assembled the song once it had
+seen both an audio file and `info.dat`; a zip missing either simply never
+resolved.
+
+**Patch applied:** the worker now posts `{message: 'error'}` on every failure
+path (which makes the UI show the song-load-error state instead of spinning),
+counts entries so "finished but incomplete" zips fail loudly, and
+`zip-loader.js` treats an uncaught worker exception as a song load error too.
+
+### Cause 2: `TypeError: this.destroy is not a function`
+
+This is a real landmine in the dependency tree:
+
+- The worker unzips with [`unzip-js`](https://github.com/Merzouqi/unzip-js),
+  which reads entries through [`blob-slicer`](https://www.npmjs.com/package/blob-slicer).
+- `blob-slicer` calls `this.destroy()` on its read stream when each entry
+  finishes — but **forgets to declare `readable-stream` in its
+  dependencies**. It gets whatever copy npm happens to hoist to the root of
+  `node_modules`.
+- `Readable.prototype.destroy()` only exists in `readable-stream` **≥ 2.3.0**.
+  This dependency tree is full of ancient packages wanting readable-stream
+  1.x, so a fresh/regenerated install can hoist a 1.x copy to the root.
+- Result: reading any zip entry throws `this.destroy is not a function` **on
+  the stream's `end` event — before the worker's own `end` handler runs** —
+  so the song data is never assembled. Combined with cause 1, that's an
+  infinite loading screen with exactly that TypeError in the console.
+
+The committed `package-lock.json` happens to resolve root `readable-stream`
+to 2.3.6 (fine), which is why builds from a clean `npm ci` work while builds
+from a re-resolved tree can silently produce a broken `build/zip.js`.
+
+**Patch applied:** `readable-stream: ^2.3.7` is now a *direct* dependency,
+which forces the root hoist to a version that has `.destroy()` no matter how
+the rest of the tree resolves.
+
+### Known remaining limitation: v4 beatmaps
+
+Moon Rider understands map format v2 natively and converts v3 → v2
+(`src/components/beat-generator.js`). The **v4** format BeatSaver introduced
+in 2024 (`info.dat` without `_difficultyBeatmapSets`) is not supported —
+previously it crashed the worker mid-parse (another infinite load). It now
+fails cleanly with a song-load-error so you can pick another song. Most of
+the popular/highly-rated catalog is v2/v3 and plays fine; supporting v4 would
+be a follow-up conversion function in the worker.
+
+## Deploying
+
+```
+docker compose up -d --build
+```
+
+gives you:
+
+- `moonrider` — nginx serving the compiled static site on port 8080
+- `beatproxy` — Flask/gunicorn proxy on port 5000
+
+Then route in your existing Caddy (see `Caddyfile.example`): `/api/*` and
+`/beatproxy*` → port 5000, everything else → port 8080. HTTPS via Caddy as
+you already have it — WebXR requires a secure context, so keep the https
+frontage.
+
+To build without Docker:
+
+```
+npm ci
+NODE_ENV=production NODE_OPTIONS=--openssl-legacy-provider npx webpack
+```
+
+and serve `index.html`, `assets/`, `build/`, `vendor/` with any web server.
+
+## Misc notes
+
+- **Firebase / leaderboards:** `src/components/leaderboard.js` only
+  initializes Firebase if an API key is configured; without one it degrades
+  gracefully. No action needed for a home-lab install.
+- **`previews.moonrider.xyz`** (`src/utils.js`) is Supermedium's S3 helper;
+  not on the play-a-song critical path.
+- The old advice of "Node < 12" in the upstream README predates the
+  `--openssl-legacy-provider` workaround; Node 22 works.
